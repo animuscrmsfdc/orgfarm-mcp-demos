@@ -1,0 +1,82 @@
+# Can be triggered manually from GitHub Actions UI (workflow_dispatch).
+# Also runs nightly at 06:00 UTC to catch any org drift.
+
+name: Run Apex Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_class:
+        description: 'Specific test class to run (leave empty to run all)'
+        required: false
+        default: ''
+  schedule:
+    - cron: '0 6 * * *'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Run Apex tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set npm global prefix to home
+        run: |
+          npm config set prefix ~/.npm-global
+          echo "$HOME/.npm-global/bin" >> $GITHUB_PATH
+
+      - name: Cache sf CLI
+        id: cache-sf
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm-global
+          key: sf-cli-${{ runner.os }}-v7
+          restore-keys: sf-cli-${{ runner.os }}-
+
+      - name: Install sf CLI
+        if: steps.cache-sf.outputs.cache-hit != 'true'
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to dev org via SFDX Auth URL
+        run: |
+          echo "${{ secrets.SFDX_AUTH_URL }}" > /tmp/sfdx_auth.txt
+          sf org login sfdx-url --sfdx-url-file /tmp/sfdx_auth.txt --alias dev-org --set-default
+          rm /tmp/sfdx_auth.txt
+
+      - name: Run all Apex tests with coverage
+        if: ${{ inputs.test_class == '' }}
+        run: |
+          sf apex run test \
+            --target-org dev-org \
+            --test-level RunLocalTests \
+            --code-coverage \
+            --result-format human \
+            --wait 20
+
+      - name: Run specific Apex test class
+        if: ${{ inputs.test_class != '' }}
+        run: |
+          sf apex run test \
+            --class-names "${{ inputs.test_class }}" \
+            --target-org dev-org \
+            --code-coverage \
+            --result-format human \
+            --wait 20
+
+      - name: Job summary
+        if: always()
+        run: |
+          echo "## Apex Test Run Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Scope | ${{ inputs.test_class != '' && inputs.test_class || 'RunLocalTests (all)' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Triggered by: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
