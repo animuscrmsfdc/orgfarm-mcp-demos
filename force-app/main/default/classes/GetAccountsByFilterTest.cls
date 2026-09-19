@@ -4,11 +4,11 @@ private class GetAccountsByFilterTest {
     @TestSetup
     static void makeData() {
         List<Account> accounts = new List<Account>{
-            new Account(Name = 'Alpha Corp',   Rating = 'Hot',  Type = 'Customer',  BillingCountry = 'US'),
-            new Account(Name = 'Beta LLC',     Rating = 'Warm', Type = 'Partner',   BillingCountry = 'UK'),
-            new Account(Name = 'Gamma Inc',    Rating = 'Hot',  Type = 'Customer',  BillingCountry = 'US'),
-            new Account(Name = 'Delta Ltd',    Rating = 'Cold', Type = 'Prospect',  BillingCountry = 'DE'),
-            new Account(Name = 'Alpha Venture',Rating = 'Hot',  Type = 'Customer',  BillingCountry = 'US')
+            new Account(Name = 'Alpha Corp',   Rating = 'Hot',  Type = 'Customer',  BillingCountry = 'United States'),
+            new Account(Name = 'Beta LLC',     Rating = 'Warm', Type = 'Partner',   BillingCountry = 'United Kingdom'),
+            new Account(Name = 'Gamma Inc',    Rating = 'Hot',  Type = 'Customer',  BillingCountry = 'United States'),
+            new Account(Name = 'Delta Ltd',    Rating = 'Cold', Type = 'Prospect',  BillingCountry = 'Germany'),
+            new Account(Name = 'Alpha Venture',Rating = 'Hot',  Type = 'Customer',  BillingCountry = 'United States')
         };
         insert accounts;
 
@@ -39,7 +39,6 @@ private class GetAccountsByFilterTest {
         GetAccountsByFilter.Response res = responses[0];
         System.assertNotEquals(null, res.accounts, 'Accounts list should not be null');
         System.assertEquals(3, res.accounts.size(), 'Expected 3 Hot accounts');
-        System.assertNotEquals(null, res.errorMessage == null ? null : res.errorMessage, '');
         System.assertEquals(null, res.errorMessage, 'No error expected');
         // First row should have most contacts (Alpha Corp = 3)
         System.assertEquals(3, res.accounts[0].contactCount, 'Top account should have 3 contacts');
@@ -48,7 +47,7 @@ private class GetAccountsByFilterTest {
     @IsTest
     static void testFilterByCountry() {
         GetAccountsByFilter.Request req = new GetAccountsByFilter.Request();
-        req.country = 'US';
+        req.country = 'United States';
 
         Test.startTest();
         List<GetAccountsByFilter.Response> responses = GetAccountsByFilter.getAccounts(
@@ -103,7 +102,7 @@ private class GetAccountsByFilterTest {
         GetAccountsByFilter.Request req = new GetAccountsByFilter.Request();
         req.rating  = 'Hot';
         req.type    = 'Customer';
-        req.country = 'US';
+        req.country = 'United States';
 
         Test.startTest();
         List<GetAccountsByFilter.Response> responses = GetAccountsByFilter.getAccounts(
