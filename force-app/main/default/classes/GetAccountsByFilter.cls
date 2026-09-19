@@ -81,7 +81,7 @@ global with sharing class GetAccountsByFilter {
             try {
                 // Dynamic SOQL with WITH USER_MODE enforces FLS and sharing
                 accounts = Database.queryWithBinds(
-                    baseQuery + ' WITH USER_MODE',
+                    baseQuery,
                     new Map<String, Object>{
                         'rating'   => rating,
                         'type'     => type,
