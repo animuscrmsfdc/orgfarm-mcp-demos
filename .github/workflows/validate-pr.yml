@@ -1,0 +1,204 @@
+# Runs on every Pull Request targeting main.
+# Performs a check-only deploy (no changes committed to org) and runs all local Apex tests.
+# The PR cannot be merged if this workflow fails.
+
+name: Validate PR
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'force-app/**'
+      - 'manifest/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate metadata & run Apex tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set npm global prefix to home
+        run: |
+          npm config set prefix ~/.npm-global
+          echo "$HOME/.npm-global/bin" >> $GITHUB_PATH
+
+      - name: Cache sf CLI
+        id: cache-sf
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm-global
+          key: sf-cli-${{ runner.os }}-v7
+          restore-keys: sf-cli-${{ runner.os }}-
+
+      - name: Install sf CLI
+        if: steps.cache-sf.outputs.cache-hit != 'true'
+        run: npm install -g @salesforce/cli
+
+      - name: Cache sfdx-scanner plugin
+        id: cache-scanner
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/sf
+          key: sf-scanner-${{ runner.os }}-v4
+          restore-keys: sf-scanner-${{ runner.os }}-
+
+      - name: Install Salesforce Code Analyzer
+        if: steps.cache-scanner.outputs.cache-hit != 'true'
+        run: sf plugins install @salesforce/sfdx-scanner
+
+      - name: Get changed Apex files
+        id: changed-files
+        run: |
+          BASE=${{ github.event.pull_request.base.sha }}
+          HEAD=${{ github.event.pull_request.head.sha }}
+          CHANGED=$(git diff --name-only "$BASE" "$HEAD" \
+            -- 'force-app/main/default/classes' 'force-app/main/default/triggers' \
+            | grep -E '\.(cls|trigger)$' \
+            | tr '\n' ',')
+          echo "files=${CHANGED%,}" >> $GITHUB_OUTPUT
+
+      - name: Run PMD static analysis
+        if: steps.changed-files.outputs.files != ''
+        run: |
+          sf scanner run \
+            --target "${{ steps.changed-files.outputs.files }}" \
+            --engine pmd \
+            --pmdconfig pmd-ruleset.xml \
+            --format sarif \
+            --outfile pmd-results.sarif \
+            --normalize-severity \
+            --severity-threshold 2
+
+      - name: Upload PMD results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pmd-results
+          path: pmd-results.sarif
+
+      - name: Authenticate to dev org via SFDX Auth URL
+        run: |
+          echo "${{ secrets.SFDX_AUTH_URL }}" > /tmp/sfdx_auth.txt
+          sf org login sfdx-url --sfdx-url-file /tmp/sfdx_auth.txt --alias dev-org --set-default
+          rm /tmp/sfdx_auth.txt
+
+      - name: Validate deploy (check-only, RunLocalTests)
+        id: deploy
+        shell: bash
+        run: |
+          set +e
+
+          sf project deploy start \
+            --source-dir force-app \
+            --target-org dev-org \
+            --dry-run \
+            --test-level RunLocalTests \
+            --wait 30 \
+            --json > deploy-start.json
+
+          start_exit_code=$?
+
+          deploy_id=$(jq -r '
+            .result.id // .result.deployId // empty
+          ' deploy-start.json)
+
+          if [ -n "$deploy_id" ]; then
+            sf project deploy report \
+              --job-id "$deploy_id" \
+              --target-org dev-org \
+              --wait 30 \
+              --json > deploy-result.json
+
+            report_exit_code=$?
+          else
+            cp deploy-start.json deploy-result.json
+            report_exit_code=1
+          fi
+
+          echo "=== Deployment status ==="
+          jq -r '
+            .result
+            | {
+                status,
+                success,
+                errorMessage,
+                message,
+                numberTestsTotal,
+                numberTestsCompleted,
+                numberComponentErrors
+              }
+          ' deploy-result.json 2>/dev/null || cat deploy-result.json
+
+          echo "=== Component failures ==="
+          jq -r '
+            def array:
+              if . == null then []
+              elif type == "array" then .
+              else [.] end;
+
+            [
+              .result.details.componentFailures?,
+              .result.details.componentFailure?,
+              .result.componentFailures?
+            ]
+            | map(array)
+            | add[]
+            | "COMPONENT [\(.problemType // "Error")] \(.fileName // ""):\(.lineNumber // "?") — \(.problem // .error // .message // "Unknown error")"
+          ' deploy-result.json 2>/dev/null || true
+
+          echo "=== Test failures ==="
+          jq -r '
+            def array:
+              if . == null then []
+              elif type == "array" then .
+              else [.] end;
+
+            [
+              .result.details.runTestResult.failures?,
+              .result.details.runTestResult.failure?,
+              .result.runTestResult.failures?
+            ]
+            | map(array)
+            | add[]
+            | "TEST \(.name // "") \(.methodName // "") — \(.message // "Unknown failure")\n  \(.stackTrace // "")"
+          ' deploy-result.json 2>/dev/null || true
+
+          echo "=== Raw deployment result ==="
+          cat deploy-result.json
+
+          if [ -n "$deploy_id" ]; then
+            exit "$report_exit_code"
+          fi
+
+          exit "$start_exit_code"
+
+      - name: Upload deployment result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deployment-result
+          path: |
+            deploy-start.json
+            deploy-result.json
+
+      - name: Job summary
+        if: always()
+        run: |
+          echo "## Validate PR Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| PMD static analysis | See \`pmd-results\` artifact |" >> $GITHUB_STEP_SUMMARY
+          echo "| Check-only deploy + RunLocalTests | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Triggered by: ${{ github.actor }} on \`${{ github.head_ref }}\`" >> $GITHUB_STEP_SUMMARY
