@@ -109,7 +109,11 @@ global with sharing class GetAccountsByFilter {
             rows.sort(new ContactCountComparator());
 
             Integer limit10 = Math.min(rows.size(), 10);
-            res.accountsJson = JSON.serialize(rows.subList(0, limit10));
+            List<AccountRow> limitedRows = new List<AccountRow>();
+            for (Integer i = 0; i < limit10; i++) {
+                limitedRows.add(rows[i]);
+            }
+            res.accountsJson = JSON.serialize(limitedRows);
 
             responses.add(res);
         }
