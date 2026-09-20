@@ -1,5 +1,7 @@
 # Runs automatically when a PR is merged into main.
-# Deploys all source to the dev org and runs all local Apex tests.
+# Promotes the already-validated deployment from the PR check via Quick Deploy
+# (no recompilation). Falls back to a full deploy only if no validated ID is found
+# (e.g. manual workflow_dispatch without a prior validate run).
 
 name: Deploy to Dev Org
 
@@ -15,6 +17,10 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
 
 jobs:
   deploy:
@@ -50,7 +56,44 @@ jobs:
           sf org login sfdx-url --sfdx-url-file /tmp/sfdx_auth.txt --alias dev-org --set-default
           rm /tmp/sfdx_auth.txt
 
-      - name: Deploy to dev org (RunLocalTests)
+      - name: Find validated deploy ID from most recent PR check
+        id: find-deploy-id
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_ID=$(gh run list \
+            --workflow validate-pr.yml \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // empty')
+
+          if [ -n "$RUN_ID" ]; then
+            gh run download "$RUN_ID" \
+              --name validated-deploy-id \
+              --dir /tmp/validated-id 2>/dev/null || true
+            DEPLOY_ID=$(cat /tmp/validated-id/validated-deploy-id.txt 2>/dev/null || echo "")
+          fi
+
+          echo "deploy_id=${DEPLOY_ID:-}" >> $GITHUB_OUTPUT
+
+          if [ -n "${DEPLOY_ID:-}" ]; then
+            echo "Using Quick Deploy with validated ID: $DEPLOY_ID (run $RUN_ID)"
+          else
+            echo "No validated deploy ID found — falling back to full deploy"
+          fi
+
+      - name: Quick deploy (promote validated package)
+        if: steps.find-deploy-id.outputs.deploy_id != ''
+        run: |
+          sf project deploy quick \
+            --job-id ${{ steps.find-deploy-id.outputs.deploy_id }} \
+            --target-org dev-org \
+            --wait 30 \
+            --json
+
+      - name: Full deploy (fallback — no validated package available)
+        if: steps.find-deploy-id.outputs.deploy_id == ''
         run: |
           sf project deploy start \
             --source-dir force-app \
@@ -58,9 +101,6 @@ jobs:
             --test-level RunLocalTests \
             --wait 30 \
             --json
-
-      - name: Verify deploy status
-        run: sf project deploy report --use-most-recent --json
 
       - name: Check if destructive changes manifest was modified
         id: check-destructive
@@ -95,11 +135,19 @@ jobs:
       - name: Job summary
         if: always()
         run: |
+          DEPLOY_ID="${{ steps.find-deploy-id.outputs.deploy_id }}"
+          if [ -n "$DEPLOY_ID" ]; then
+            DEPLOY_MODE="Quick Deploy (promoted validated ID: $DEPLOY_ID)"
+          else
+            DEPLOY_MODE="Full deploy (fallback)"
+          fi
+
           echo "## Deploy to Dev Org Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Deploy + RunLocalTests | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy mode | $DEPLOY_MODE |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy + tests | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Destructive changes | applied on success |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Triggered by: ${{ github.actor }} on \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY

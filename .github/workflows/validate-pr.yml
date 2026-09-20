@@ -1,5 +1,6 @@
 # Runs on every Pull Request targeting main.
 # Performs a check-only deploy (no changes committed to org) and runs all local Apex tests.
+# Saves the validated deploy ID as an artifact so deploy-main can promote it with Quick Deploy.
 # The PR cannot be merged if this workflow fails.
 
 name: Validate PR
@@ -104,40 +105,18 @@ jobs:
             --dry-run \
             --test-level RunLocalTests \
             --wait 30 \
-            --json > deploy-start.json
+            --json > deploy-result.json
 
-          start_exit_code=$?
-
-          deploy_id=$(jq -r '
-            .result.id // .result.deployId // empty
-          ' deploy-start.json)
+          deploy_id=$(jq -r '.result.id // .result.deployId // empty' deploy-result.json 2>/dev/null)
 
           if [ -n "$deploy_id" ]; then
             sf project deploy report \
               --job-id "$deploy_id" \
               --target-org dev-org \
               --wait 30 \
-              --json > deploy-result.json
-
-            report_exit_code=$?
-          else
-            cp deploy-start.json deploy-result.json
-            report_exit_code=1
+              --json > deploy-report.json 2>/dev/null \
+              && cp deploy-report.json deploy-result.json || true
           fi
-
-          echo "=== Deployment status ==="
-          jq -r '
-            .result
-            | {
-                status,
-                success,
-                errorMessage,
-                message,
-                numberTestsTotal,
-                numberTestsCompleted,
-                numberComponentErrors
-              }
-          ' deploy-result.json 2>/dev/null || cat deploy-result.json
 
           echo "=== Component failures ==="
           jq -r '
@@ -173,23 +152,38 @@ jobs:
             | "TEST \(.name // "") \(.methodName // "") — \(.message // "Unknown failure")\n  \(.stackTrace // "")"
           ' deploy-result.json 2>/dev/null || true
 
-          echo "=== Raw deployment result ==="
-          cat deploy-result.json
+          # Parse success from JSON — SF CLI exit codes are unreliable for check-only
+          # deploys across versions; the JSON field is authoritative
+          success=$(jq -r '.result.success // false' deploy-result.json 2>/dev/null)
 
-          if [ -n "$deploy_id" ]; then
-            exit "$report_exit_code"
+          echo "deploy_success=$success" >> $GITHUB_OUTPUT
+          echo "deploy_id=$deploy_id" >> $GITHUB_OUTPUT
+
+          if [ "$success" != "true" ]; then
+            echo "Validation failed (success=$success)"
+            exit 1
           fi
 
-          exit "$start_exit_code"
+      - name: Upload validated deploy ID
+        if: steps.deploy.outcome == 'success' && steps.deploy.outputs.deploy_id != ''
+        run: echo "${{ steps.deploy.outputs.deploy_id }}" > validated-deploy-id.txt
 
-      - name: Upload deployment result
+      - name: Upload deploy artifacts
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: deployment-result
           path: |
-            deploy-start.json
             deploy-result.json
+            pmd-results.sarif
+
+      - name: Upload validated deploy ID artifact
+        if: steps.deploy.outcome == 'success' && steps.deploy.outputs.deploy_id != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: validated-deploy-id
+          path: validated-deploy-id.txt
+          retention-days: 10
 
       - name: Job summary
         if: always()
@@ -200,5 +194,6 @@ jobs:
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| PMD static analysis | See \`pmd-results\` artifact |" >> $GITHUB_STEP_SUMMARY
           echo "| Check-only deploy + RunLocalTests | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Validated deploy ID | ${{ steps.deploy.outputs.deploy_id || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Triggered by: ${{ github.actor }} on \`${{ github.head_ref }}\`" >> $GITHUB_STEP_SUMMARY
