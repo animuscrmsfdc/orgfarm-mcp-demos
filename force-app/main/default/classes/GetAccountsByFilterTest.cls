@@ -24,6 +24,13 @@ private class GetAccountsByFilterTest {
         insert contacts;
     }
 
+    private static List<GetAccountsByFilter.AccountRow> parseRows(GetAccountsByFilter.Response res) {
+        return (List<GetAccountsByFilter.AccountRow>) JSON.deserialize(
+            res.accountsJson,
+            List<GetAccountsByFilter.AccountRow>.class
+        );
+    }
+
     @IsTest
     static void testFilterByRating() {
         GetAccountsByFilter.Request req = new GetAccountsByFilter.Request();
@@ -37,11 +44,12 @@ private class GetAccountsByFilterTest {
 
         System.assertEquals(1, responses.size(), 'Expected one response');
         GetAccountsByFilter.Response res = responses[0];
-        System.assertNotEquals(null, res.accounts, 'Accounts list should not be null');
-        System.assertEquals(3, res.accounts.size(), 'Expected 3 Hot accounts');
+        System.assertNotEquals(null, res.accountsJson, 'accountsJson should not be null');
         System.assertEquals(null, res.errorMessage, 'No error expected');
-        // First row should have most contacts (Alpha Corp = 3)
-        System.assertEquals(3, res.accounts[0].contactCount, 'Top account should have 3 contacts');
+
+        List<GetAccountsByFilter.AccountRow> rows = parseRows(res);
+        System.assertEquals(3, rows.size(), 'Expected 3 Hot accounts');
+        System.assertEquals(3, rows[0].contactCount, 'Top account should have 3 contacts');
     }
 
     @IsTest
@@ -55,12 +63,11 @@ private class GetAccountsByFilterTest {
         );
         Test.stopTest();
 
-        GetAccountsByFilter.Response res = responses[0];
-        System.assertEquals(3, res.accounts.size(), 'Expected 3 US accounts');
-        // Verify descending order by contact count
-        for (Integer i = 0; i < res.accounts.size() - 1; i++) {
+        List<GetAccountsByFilter.AccountRow> rows = parseRows(responses[0]);
+        System.assertEquals(3, rows.size(), 'Expected 3 US accounts');
+        for (Integer i = 0; i < rows.size() - 1; i++) {
             System.assert(
-                res.accounts[i].contactCount >= res.accounts[i + 1].contactCount,
+                rows[i].contactCount >= rows[i + 1].contactCount,
                 'Results should be sorted descending by contact count'
             );
         }
@@ -77,8 +84,8 @@ private class GetAccountsByFilterTest {
         );
         Test.stopTest();
 
-        GetAccountsByFilter.Response res = responses[0];
-        System.assertEquals(2, res.accounts.size(), 'Expected 2 Alpha accounts');
+        List<GetAccountsByFilter.AccountRow> rows = parseRows(responses[0]);
+        System.assertEquals(2, rows.size(), 'Expected 2 Alpha accounts');
     }
 
     @IsTest
@@ -92,9 +99,9 @@ private class GetAccountsByFilterTest {
         );
         Test.stopTest();
 
-        GetAccountsByFilter.Response res = responses[0];
-        System.assertEquals(1, res.accounts.size(), 'Expected 1 Partner account');
-        System.assertEquals('Beta LLC', res.accounts[0].accountName);
+        List<GetAccountsByFilter.AccountRow> rows = parseRows(responses[0]);
+        System.assertEquals(1, rows.size(), 'Expected 1 Partner account');
+        System.assertEquals('Beta LLC', rows[0].accountName);
     }
 
     @IsTest
@@ -112,7 +119,8 @@ private class GetAccountsByFilterTest {
 
         GetAccountsByFilter.Response res = responses[0];
         System.assertEquals(null, res.errorMessage);
-        System.assert(res.accounts.size() <= 10, 'Result capped at 10');
+        List<GetAccountsByFilter.AccountRow> rows = parseRows(res);
+        System.assert(rows.size() <= 10, 'Result capped at 10');
     }
 
     @IsTest
@@ -127,7 +135,7 @@ private class GetAccountsByFilterTest {
 
         GetAccountsByFilter.Response res = responses[0];
         System.assertNotEquals(null, res.errorMessage, 'Expected an error message');
-        System.assertEquals(0, res.accounts.size(), 'No accounts returned on error');
+        System.assertEquals(null, res.accountsJson, 'No accountsJson returned on error');
     }
 
     @IsTest
@@ -141,7 +149,8 @@ private class GetAccountsByFilterTest {
         );
         Test.stopTest();
 
-        GetAccountsByFilter.AccountRow row = responses[0].accounts[0];
+        List<GetAccountsByFilter.AccountRow> rows = parseRows(responses[0]);
+        GetAccountsByFilter.AccountRow row = rows[0];
         System.assertNotEquals(null, row.accountId,   'Id required');
         System.assertNotEquals(null, row.accountName, 'Name required');
         System.assertNotEquals(null, row.rating,      'Rating required');
