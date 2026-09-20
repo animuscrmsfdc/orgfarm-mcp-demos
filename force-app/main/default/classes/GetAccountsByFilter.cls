@@ -29,13 +29,11 @@ global with sharing class GetAccountsByFilter {
     }
 
     global class Response {
-        @InvocableVariable(label='Account Rows')
-        public List<AccountRow> accounts;
+        @InvocableVariable(label='Accounts JSON' description='JSON array of matching account rows; parse with JSON.deserialize or any MCP client')
+        public String accountsJson;
         @InvocableVariable(label='Error Message')
         public String errorMessage;
-        global Response() {
-            this.accounts = new List<AccountRow>();
-        }
+        global Response() {}
     }
 
     @InvocableMethod(
@@ -111,9 +109,7 @@ global with sharing class GetAccountsByFilter {
             rows.sort(new ContactCountComparator());
 
             Integer limit10 = Math.min(rows.size(), 10);
-            for (Integer i = 0; i < limit10; i++) {
-                res.accounts.add(rows[i]);
-            }
+            res.accountsJson = JSON.serialize(rows.subList(0, limit10));
 
             responses.add(res);
         }
